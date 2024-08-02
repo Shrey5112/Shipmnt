@@ -1,0 +1,249 @@
+Sure! Here is how you can structure your project using ES modules.
+
+### 1. Setting Up the Project
+
+1. **Environment Setup**:
+   - Initialize a Node.js project.
+   - Install necessary packages: `express`, `nodemailer`, `node-cron`, `mongoose` (for MongoDB), and `body-parser`.
+
+```bash
+mkdir email-scheduler
+cd email-scheduler
+npm init -y
+npm install express nodemailer node-cron mongoose body-parser
+```
+
+2. **Project Structure**:
+   - Create the following directory structure:
+     ```
+     email-scheduler
+     ├── config
+     │   └── db.js
+     ├── controllers
+     │   └── emailController.js
+     ├── models
+     │   └── emailModel.js
+     ├── routes
+     │   └── emailRoutes.js
+     ├── services
+     │   └── emailService.js
+     ├── app.js
+     └── server.js
+     ```
+
+### 2. Database Configuration
+
+1. **Database Connection** (`config/db.js`):
+
+```javascript
+import mongoose from 'mongoose';
+
+const connectDB = async () => {
+  try {
+    await mongoose.connect('mongodb://localhost:27017/emailScheduler', {
+      useNewUrlParser: true,
+      useUnifiedTopology: true,
+    });
+    console.log('MongoDB connected');
+  } catch (err) {
+    console.error(err.message);
+    process.exit(1);
+  }
+};
+
+export default connectDB;
+```
+
+2. **Email Model** (`models/emailModel.js`):
+
+```javascript
+import mongoose from 'mongoose';
+
+const emailSchema = new mongoose.Schema({
+  recipient: { type: String, required: true },
+  subject: { type: String, required: true },
+  body: { type: String, required: true },
+  attachments: { type: Array },
+  scheduleTime: { type: Date, required: true },
+  recurring: { type: String, enum: ['daily', 'weekly', 'monthly', 'quarterly'], default: null },
+  status: { type: String, enum: ['scheduled', 'sent', 'cancelled'], default: 'scheduled' },
+});
+
+const Email = mongoose.model('Email', emailSchema);
+
+export default Email;
+```
+
+### 3. API Endpoints
+
+1. **Email Controller** (`controllers/emailController.js`):
+
+```javascript
+import Email from '../models/emailModel.js';
+import { scheduleEmail } from '../services/emailService.js';
+
+export const scheduleEmailHandler = async (req, res) => {
+  try {
+    const email = new Email(req.body);
+    await email.save();
+    scheduleEmail(email);
+    res.status(201).send(email);
+  } catch (error) {
+    res.status(500).send(error.message);
+  }
+};
+
+export const getAllScheduledEmails = async (req, res) => {
+  try {
+    const emails = await Email.find({ status: 'scheduled' });
+    res.status(200).send(emails);
+  } catch (error) {
+    res.status(500).send(error.message);
+  }
+};
+
+export const getScheduledEmailById = async (req, res) => {
+  try {
+    const email = await Email.findById(req.params.id);
+    if (!email) {
+      return res.status(404).send('Email not found');
+    }
+    res.status(200).send(email);
+  } catch (error) {
+    res.status(500).send(error.message);
+  }
+};
+
+export const cancelScheduledEmail = async (req, res) => {
+  try {
+    const email = await Email.findByIdAndUpdate(req.params.id, { status: 'cancelled' }, { new: true });
+    if (!email) {
+      return res.status(404).send('Email not found');
+    }
+    res.status(200).send(email);
+  } catch (error) {
+    res.status(500).send(error.message);
+  }
+};
+```
+
+2. **Email Routes** (`routes/emailRoutes.js`):
+
+```javascript
+import express from 'express';
+import {
+  scheduleEmailHandler,
+  getAllScheduledEmails,
+  getScheduledEmailById,
+  cancelScheduledEmail,
+} from '../controllers/emailController.js';
+
+const router = express.Router();
+
+router.post('/schedule-email', scheduleEmailHandler);
+router.get('/scheduled-emails', getAllScheduledEmails);
+router.get('/scheduled-emails/:id', getScheduledEmailById);
+router.delete('/scheduled-emails/:id', cancelScheduledEmail);
+
+export default router;
+```
+
+3. **Email Service** (`services/emailService.js`):
+
+```javascript
+import nodemailer from 'nodemailer';
+import cron from 'node-cron';
+import Email from '../models/emailModel.js';
+
+const transporter = nodemailer.createTransport({
+  service: 'gmail',
+  auth: {
+    user: 'your-email@gmail.com',
+    pass: 'your-email-password',
+  },
+});
+
+export const scheduleEmail = (email) => {
+  const { scheduleTime, recipient, subject, body, attachments, recurring } = email;
+
+  const sendEmail = async () => {
+    try {
+      await transporter.sendMail({
+        from: 'your-email@gmail.com',
+        to: recipient,
+        subject: subject,
+        text: body,
+        attachments: attachments,
+      });
+      email.status = 'sent';
+      await email.save();
+    } catch (error) {
+      console.error('Error sending email:', error);
+    }
+  };
+
+  cron.schedule(new Date(scheduleTime), sendEmail);
+
+  if (recurring) {
+    let recurrencePattern;
+    switch (recurring) {
+      case 'daily':
+        recurrencePattern = '0 0 * * *'; // Adjust the cron pattern as needed
+        break;
+      case 'weekly':
+        recurrencePattern = '0 0 * * 0'; // Adjust the cron pattern as needed
+        break;
+      case 'monthly':
+        recurrencePattern = '0 0 1 * *'; // Adjust the cron pattern as needed
+        break;
+      case 'quarterly':
+        recurrencePattern = '0 0 1 */3 *'; // Adjust the cron pattern as needed
+        break;
+    }
+    cron.schedule(recurrencePattern, sendEmail);
+  }
+};
+```
+
+### 4. Server Setup
+
+1. **App Initialization** (`app.js`):
+
+```javascript
+import express from 'express';
+import bodyParser from 'body-parser';
+import connectDB from './config/db.js';
+import emailRoutes from './routes/emailRoutes.js';
+
+const app = express();
+
+connectDB();
+
+app.use(bodyParser.json());
+app.use('/api', emailRoutes);
+
+export default app;
+```
+
+2. **Server** (`server.js`):
+
+```javascript
+import app from './app.js';
+
+const PORT = process.env.PORT || 5000;
+
+app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
+});
+```
+
+### 5. Testing the API
+
+Use Postman or any other API testing tool to test the endpoints:
+
+- **POST /api/schedule-email**: Schedule a new email.
+- **GET /api/scheduled-emails**: Retrieve all scheduled emails.
+- **GET /api/scheduled-emails/{id}**: Retrieve details of a specific scheduled email.
+- **DELETE /api/scheduled-emails/{id}**: Cancel a scheduled email.
+
+This setup provides a robust foundation for your Automated Email Scheduling API, covering scheduling, recurring emails, and CRUD operations on the scheduled emails.
